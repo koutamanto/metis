@@ -1,50 +1,64 @@
 # Metis
 
-複数の [Claude Code](https://claude.com/claude-code) セッションと並行して作業するための、
-macOS ターミナル環境一式。
+複数の [Claude Code](https://claude.com/claude-code) セッションを並行運用するための、
+macOS 向けターミナル環境一式である。
 
-Claude Code をどこからでも呼び出せるようにしつつ、その状態（実行中・確認待ち・完了）を
-音声とパネルで把握し、画面の指示やスクリーンショットからワンキーで行動を起こせるように
-することを目標にしている。
+Claude Code のセッションをどこからでも呼び出せる状態に保ちつつ、各セッションの状態
+（実行中・確認待ち・完了）を音声とパネルで把握できるようにし、さらに画面上の指示や
+スクリーンショットを起点に単一のキー操作で行動を開始できることを目的として構築した。
 
-## 中身
+## 構成
 
-| 層 | 何を提供するか |
+| 層 | 提供する機能 |
 |---|---|
-| **シェル (zsh)** | eza/bat/fd/ripgrep/zoxide/atuin/fzf などモダン CLI への総入れ替え、tmux ベースのセッション管理コマンド (`cw` `cl` `cj` `cr` `cfork`) |
-| **Ghostty** | Tokyo Night テーマ、クイックターミナル、分割・タブのキーバインド |
-| **tmux** | Claude Code セッションの母艦。ウィンドウを閉じても死なない |
-| **AeroSpace** | ワークスペース分離（エディタ / Claude 群 / ブラウザ / 雑用） |
-| **Hammerspoon (Metis)** | 下記参照 |
+| **シェル (zsh)** | eza / bat / fd / ripgrep / zoxide / atuin / fzf 等によるモダン CLI への置き換え、および tmux を母艦とするセッション管理コマンド群（`cw` `cl` `cj` `cr` `cfork`） |
+| **Ghostty** | Tokyo Night テーマ、クイックターミナル、分割・タブに関するキーバインド |
+| **tmux** | Claude Code セッションの実行基盤。ウィンドウを閉じてもセッションは継続する |
+| **AeroSpace** | ワークスペースの分離（エディタ／Claude セッション群／ブラウザ／その他） |
+| **Hammerspoon（Metis）** | 下記を参照 |
 
-## Metis とは
+## Metis について
 
-Hammerspoon 上に実装した、Claude Code の常駐アシスタント層。
+Hammerspoon 上に実装した、Claude Code のための常駐アシスタント層である。
 
-- **セッションバス** — Claude Code のフック (`SessionStart` / `UserPromptSubmit` /
-  `Notification` / `Stop` / `SessionEnd`) から状態を集約し、他の全機能がここを読む
-- **読み上げ** — 裏で走っているセッションが完了・確認待ちになったときだけ音声で知らせる。
-  見えているセッションは黙る（可視判定つき）
-- **HUD** — 画面右上に半透明で全セッションの状態を常時表示
-- **Quick Action** — 選択テキストや画面のスクリーンショットを Sonnet 5 に投げて即答させる
-  (`⌘⌥A` 高速質問 / `⌘⌥⇧A` 深掘り / `⌘⌥S` コマンド生成・確認・実行 /
-  `⌘⌥X` 画面の指示を読み取って一括確認後に実行 / `⌘⌥V` 画面を撮って質問)
-- **Metis パネル** — Quick Action の結果を一元管理。トリガーした瞬間に「考え中」が
-  出て、回答が来ると埋まる（体感速度重視。実測レイテンシそのものは変えていない）
-- **Quick Action Interactor** — 専用 TUI。Quick Action の履歴を一覧し、選ぶとその
-  文脈を引き継いだ新しい永続セッションへ昇格できる
-- **脳内ステート (mind)** — 「今やっていること / 次にやること / 保留」を一行メモの
-  蓄積から自動で再構成する。書く手間をゼロに近づけるのが狙い
-- **画面観測 (eye)** — フォーカス中のウィンドウのみを対象にした撮影。パスワード管理・
-  メッセージ・ビデオ会議アプリなどは既定で除外、無操作が続くと自動停止
-- **ショートカット早見表** — `⌘⌥/` で全ホットキーを一覧表示
+- **セッションバス** — Claude Code のフック（`SessionStart` / `UserPromptSubmit` /
+  `Notification` / `Stop` / `SessionEnd`）から状態を集約する。他の全機能はこのバスを
+  参照して動作する
+- **読み上げ** — バックグラウンドで実行中のセッションが完了、または確認待ちの状態に
+  遷移した場合にのみ音声で通知する。可視状態にあるセッションについては通知を抑制する
+- **HUD** — 画面右上に半透明のオーバーレイとして、全セッションの状態を常時表示する
+- **Quick Action** — 選択テキストまたは画面のスクリーンショットを Sonnet 5 に送信し、
+  即時応答を得る。用途に応じて以下のキー操作を用意している
+  - `⌘⌥A` — 高速質問
+  - `⌘⌥⇧A` — 深掘り（Opus）
+  - `⌘⌥S` — コマンド生成・内容確認・実行
+  - `⌘⌥X` — 画面上の指示を読み取り、一括確認の上で実行
+  - `⌘⌥V` — 画面を撮影した上で質問
+- **Metis パネル** — Quick Action の結果を一元的に表示する。操作を実行した時点で
+  即座に「処理中」の表示を出し、応答が届き次第内容を更新する構成とすることで、実際の
+  応答速度は変えずに体感上の待ち時間を短縮している
+- **Quick Action Interactor** — 専用の TUI。Quick Action の実行履歴を一覧表示し、
+  任意の履歴を選択することで、その文脈を引き継いだ新規の永続セッションへ移行できる
+- **脳内ステート（mind）** — 断片的な一行メモの蓄積から、「現在の作業内容」「次に
+  行うべきこと」「保留事項」を自動的に再構成する。記録に要する手間を最小化することを
+  重視した設計としている
+- **画面観測（eye）** — 既定では、フォーカスの当たっているウィンドウのみを対象として
+  撮影を行う。パスワード管理・メッセージング・ビデオ会議等のアプリケーションは既定で
+  除外対象とし、一定時間操作が無い場合は自動的に停止する
+- **ショートカット一覧** — `⌘⌥/` により、登録済みの全ホットキーを一覧表示する
 
-ホットキー一覧・使い方は [`claude/TUTORIAL.md`](claude/TUTORIAL.md) を参照。
+ホットキーの詳細および使用方法については [`claude/TUTORIAL.md`](claude/TUTORIAL.md)
+を参照されたい。
 
 ## セットアップ
 
-前提: [Homebrew](https://brew.sh)、[Claude Code CLI](https://claude.com/claude-code)、
-macOS。
+### 前提条件
+
+- macOS
+- [Homebrew](https://brew.sh)
+- [Claude Code CLI](https://claude.com/claude-code)
+
+### 依存パッケージのインストール
 
 ```sh
 brew install eza bat fd ripgrep fzf zoxide starship delta tmux lazygit btop \
@@ -54,8 +68,10 @@ brew install --cask ghostty hammerspoon font-jetbrains-mono-nerd-font
 brew tap nikitabobko/tap && brew install --cask nikitabobko/tap/aerospace
 ```
 
+### 配置
+
 ```sh
-git clone <このリポジトリ> ~/metis-src
+git clone <このリポジトリの URL> ~/metis-src
 cd ~/metis-src
 
 # シェル
@@ -71,40 +87,43 @@ cp tmux/tmux.conf ~/.tmux.conf
 cp aerospace/aerospace.toml ~/.config/aerospace/aerospace.toml
 cp bat/config ~/.config/bat/config
 
-# Hammerspoon (Metis)
+# Hammerspoon（Metis）
 cp hammerspoon/*.lua ~/.hammerspoon/
 
-# Claude Code 側
+# Claude Code
 mkdir -p ~/.claude/bin ~/.claude/session-bus ~/.claude/metis ~/.claude/quick-log \
          ~/.claude/mind ~/.claude/eye/frames ~/.claude/eye/archive
 cp claude/bin/* ~/.claude/bin/
 chmod +x ~/.claude/bin/*
 cp claude/config/*.json ~/.claude/
-mv ~/.claude/settings.hooks.example.json ~/.claude/  # 参考用。settings.json には手でマージする
 cp claude/TUTORIAL.md ~/.claude/
 ```
 
-`~/.claude/settings.json` の `hooks` / `statusLine` に
-`claude/config/settings.hooks.example.json` の内容をマージしてください
-（既存の設定を上書きしないよう手動で統合するのを推奨します）。
+`~/.claude/settings.json` の `hooks` および `statusLine` の項目に、
+`claude/config/settings.hooks.example.json` の内容を統合する。既存の設定を上書き
+しないよう、手動でのマージを推奨する。
 
-Hammerspoon と AeroSpace は初回起動時に **システム設定 → プライバシーとセキュリティ →
-アクセシビリティ**（Hammerspoon はさらに**画面収録**も）を有効化する必要があります。
+Hammerspoon および AeroSpace は、初回起動時に「システム設定 → プライバシーとセキュリ
+ティ → アクセシビリティ」での許可が必要である。Hammerspoon については、これに加えて
+「画面収録」の許可も必要となる。
 
-## 注意点
+## 注意事項
 
-- ホットキーは全て `⌘⌥` 系。macOS 標準の `⌘⌥Space`（Finder検索）や `⌘⌥D`（Dock表示切替）
-  など予約済みの組み合わせを避けて設計してあるが、自分の環境の他アプリと衝突する場合は
-  `hammerspoon/init.lua` の `MASH` / 各 `hs.hotkey.bind` を書き換えること
-- 画面観測 (`eye.lua`) は既定で「フォーカス中のウィンドウのみ・除外リストあり」の
-  セーフモード。除外対象は `claude/config/eye-config.json` の `deny_bundles` /
-  `deny_title_patterns` で調整できる
-- `⌘⌥S` のコマンド生成は既定で実行前に確認ダイアログを挟む
-  （`claude/config/quick-config.json` の `confirm`）
-- `~/.claude/session-bus/` `~/.claude/metis/` `~/.claude/mind/` `~/.claude/eye/frames|archive/`
-  は実行時に生成される状態ファイルで、このリポジトリには含まれていない
+- ホットキーはすべて `⌘⌥` を基本とする組み合わせで構成している。macOS 標準の
+  `⌘⌥Space`（Finder 検索）や `⌘⌥D`（Dock 表示切替）等、予約済みの組み合わせとは
+  重複しないよう設計しているが、使用中の他アプリケーションと競合する場合は
+  `hammerspoon/init.lua` 内の `MASH` および各 `hs.hotkey.bind` の定義を変更されたい
+- 画面観測機能（`eye.lua`）は、既定で「フォーカス中のウィンドウのみを対象とし、
+  除外リストを適用する」セーフモードで動作する。除外対象の設定は
+  `claude/config/eye-config.json` の `deny_bundles` および `deny_title_patterns` で
+  調整できる
+- `⌘⌥S` によるコマンド生成では、既定で実行前に確認ダイアログを表示する構成として
+  いる（設定は `claude/config/quick-config.json` の `confirm` を参照）
+- `~/.claude/session-bus/` `~/.claude/metis/` `~/.claude/mind/`
+  `~/.claude/eye/frames|archive/` は実行時に生成される状態ファイルの格納先であり、
+  本リポジトリには含めていない
 
 ## ライセンス
 
-なし（All rights reserved）。個人の設定を公開しているものなので、参考にする分には
-自由に見てもらって構いませんが、再配布・改変しての公開は想定していません。
+指定なし（All rights reserved）。個人の設定を公開する目的で作成したものであり、
+内容を参考にすることは差し支えないが、再配布および改変を伴う公開は想定していない。
