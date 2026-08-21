@@ -1,0 +1,74 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Ghostty  —  設定リロード: Cmd+Shift+, / 設定一覧: ghostty +show-config
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── フォント ────────────────────────────────────────────────────────────────
+font-family = "JetBrainsMono Nerd Font"
+font-size = 14
+font-thicken = true
+font-feature = calt
+font-feature = liga
+adjust-cell-height = 12%
+
+# ─── テーマ / 配色 (Tokyo Night) ─────────────────────────────────────────────
+theme = light:TokyoNight Day,dark:TokyoNight Night
+background-opacity = 0.96
+background-blur-radius = 20
+unfocused-split-opacity = 0.75
+
+# ─── カーソル ────────────────────────────────────────────────────────────────
+cursor-style = block
+cursor-style-blink = true
+shell-integration-features = cursor,sudo,title
+mouse-hide-while-typing = true
+
+# ─── ウィンドウ ──────────────────────────────────────────────────────────────
+window-padding-x = 14
+window-padding-y = 10
+window-padding-balance = true
+window-decoration = true
+window-theme = auto
+window-save-state = always
+macos-titlebar-style = transparent
+macos-option-as-alt = true
+window-height = 45
+window-width = 160
+
+# ─── スクロールバック ────────────────────────────────────────────────────────
+scrollback-limit = 100000
+copy-on-select = clipboard
+confirm-close-surface = true
+
+# ─── クイックターミナル (どこからでも Cmd+` で降りてくる) ────────────────────
+quick-terminal-position = top
+quick-terminal-animation-duration = 0.12
+keybind = global:cmd+grave_accent=toggle_quick_terminal
+
+# ─── 分割ペイン ──────────────────────────────────────────────────────────────
+keybind = cmd+d=new_split:right
+keybind = cmd+shift+d=new_split:down
+keybind = cmd+w=close_surface
+keybind = cmd+alt+left=goto_split:left
+keybind = cmd+alt+right=goto_split:right
+keybind = cmd+alt+up=goto_split:up
+keybind = cmd+alt+down=goto_split:down
+keybind = cmd+shift+enter=toggle_split_zoom
+keybind = cmd+ctrl+left=resize_split:left,20
+keybind = cmd+ctrl+right=resize_split:right,20
+keybind = cmd+ctrl+up=resize_split:up,20
+keybind = cmd+ctrl+down=resize_split:down,20
+
+# ─── タブ ────────────────────────────────────────────────────────────────────
+keybind = cmd+t=new_tab
+keybind = cmd+shift+left=previous_tab
+keybind = cmd+shift+right=next_tab
+
+# ─── その他 ──────────────────────────────────────────────────────────────────
+keybind = cmd+k=clear_screen
+keybind = cmd+shift+comma=reload_config
+keybind = cmd+plus=increase_font_size:1
+keybind = cmd+minus=decrease_font_size:1
+keybind = cmd+zero=reset_font_size
+
+# ─── Claude パネル用: 常に手前に固定するトグル ──────────────────────────────
+keybind = cmd+shift+f=toggle_window_float_on_top

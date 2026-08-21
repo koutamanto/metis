@@ -1,0 +1,80 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-speak <session_id> <state>
+#  裏で走っているセッションだけを読み上げる。見えているものは黙る。
+#  発話はロックで直列化し、同時完了しても被らないようにする。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset
+
+BUS="$HOME/.claude/session-bus"
+CFG="$HOME/.claude/voice-config.json"
+LOCK="$HOME/.claude/.speak.lock"
+
+sid="${1:-}"; state="${2:-}"
+[[ -n "$sid" && -n "$state" ]] || exit 0
+
+rec="$BUS/$sid.json"
+[[ -f "$rec" ]] || exit 0
+
+# ─── 設定（無ければ既定値） ─────────────────────────────────────────────────
+enabled=true; done_voice="Kyoko"; wait_voice="Otoya"; rate=210; only_hidden=true
+if [[ -f "$CFG" ]]; then
+  IFS=$'\t' read -r enabled done_voice wait_voice rate only_hidden <<< "$(
+    jq -r '[(.enabled // true), (.done_voice // "Kyoko"), (.wait_voice // "Otoya"),
+            (.rate // 210), (.only_when_hidden // true)] | @tsv' "$CFG" 2>/dev/null)"
+fi
+[[ "$enabled" == "true" ]] || exit 0
+
+project="$(jq -r '.project // "セッション"' "$rec")"
+pane="$(jq -r '.tmux_pane // ""' "$rec")"
+
+# ─── 可視判定 ────────────────────────────────────────────────────────────────
+# 「ターミナルが最前面」かつ「そのペインが実際に表示されている」なら黙る。
+is_visible() {
+  local front bundle
+  front="$(lsappinfo front 2>/dev/null)" || return 1
+  bundle="$(lsappinfo info -only bundleid "$front" 2>/dev/null)"
+  case "$bundle" in
+    *com.mitchellh.ghostty*|*com.apple.Terminal*|*iTerm*|*WezTerm*) ;;
+    *) return 1 ;;   # ターミナル以外を見ている → 見えていない
+  esac
+
+  # tmux 外のセッションはペインを特定できない。
+  # ターミナルが最前面なら見えている可能性が高いとみなす。
+  [[ -n "$pane" ]] || return 0
+
+  # attach 済みセッションの、アクティブウィンドウの、アクティブペインか
+  local flags
+  flags="$(tmux list-panes -a -F '#{pane_id} #{session_attached}#{window_active}#{pane_active}' 2>/dev/null \
+           | awk -v p="$pane" '$1==p {print $2}')"
+  [[ "$flags" == "111" ]]
+}
+
+if [[ "$only_hidden" == "true" ]]; then
+  is_visible && exit 0
+fi
+
+# ─── 文言と声 ────────────────────────────────────────────────────────────────
+case "$state" in
+  done)    voice="$done_voice"; text="${project}、完了"           ;;
+  waiting) voice="$wait_voice"; text="${project}、確認待ちです"    ;;
+  error)   voice="$done_voice"; text="${project}、エラーです"; rate=170 ;;
+  *) exit 0 ;;
+esac
+
+# ─── 直列化（mkdir は原子的） ───────────────────────────────────────────────
+typeset -i waited=0
+while ! mkdir "$LOCK" 2>/dev/null; do
+  # 古いロックは取り除く（発話プロセスが落ちた場合の保険）
+  if [[ -d "$LOCK" ]] && (( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) > 20 )); then
+    rmdir "$LOCK" 2>/dev/null
+    continue
+  fi
+  sleep 0.25
+  (( waited += 1 ))
+  (( waited > 60 )) && exit 0    # 15秒待っても取れなければ諦める
+done
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+say -v "$voice" -r "$rate" "$text" 2>/dev/null

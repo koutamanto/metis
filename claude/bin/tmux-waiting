@@ -1,0 +1,5 @@
+#!/bin/zsh
+# tmux ステータス用: 待ち状態のセッション数（0 なら何も出さない）
+n="$($HOME/.claude/bin/claude-sessions --waiting 2>/dev/null | wc -l | tr -d ' ')"
+(( ${n:-0} > 0 )) && print -rn -- "◆${n} 待機  "
+exit 0

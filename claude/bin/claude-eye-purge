@@ -1,0 +1,4 @@
+#!/bin/zsh
+# 撮影済みフレームを即座に全削除する（プライバシー上の緊急停止用）
+rm -f "$HOME/.claude/eye/frames"/*.jpg "$HOME/.claude/eye/archive"/*.jpg 2>/dev/null
+exit 0

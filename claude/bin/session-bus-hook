@@ -1,0 +1,84 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  session-bus-hook — Claude Code のフックから呼ばれ、セッションの状態を
+#  ~/.claude/session-bus/<session_id>.json に書き出す。
+#  ここが読み上げ・HUD・ジャンプすべての唯一の状態ソースになる。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset pipe_fail
+
+BUS="$HOME/.claude/session-bus"
+BIN="$HOME/.claude/bin"
+mkdir -p "$BUS"
+
+# claude -p による内部呼び出し（Quick Action や mind sync）は一覧に載せない
+[[ -n "${CLAUDE_BUS_SKIP:-}" ]] && exit 0
+
+payload="$(cat)"
+[[ -n "$payload" ]] || exit 0
+
+# jq 1回で必要なフィールドをまとめて取り出す（プロセス起動を最小化）
+IFS=$'\t' read -r event sid cwd transcript <<< "$(
+  print -r -- "$payload" | jq -r '[.hook_event_name // "",
+                                   .session_id       // "",
+                                   .cwd              // "",
+                                   .transcript_path  // ""] | @tsv' 2>/dev/null
+)"
+[[ -n "${sid:-}" ]] || exit 0
+
+case "$event" in
+  SessionStart)      state="idle"    ;;
+  UserPromptSubmit)  state="running" ;;
+  Notification)      state="waiting" ;;
+  PreToolUse)        state="waiting" ;;   # AskUserQuestion のみ登録している
+  PermissionRequest) state="waiting" ;;
+  Stop)              state="done"    ;;
+  SessionEnd)        rm -f "$BUS/$sid.json"; exit 0 ;;
+  *)                 exit 0 ;;
+esac
+
+project="${cwd:t}"
+[[ -n "$project" ]] || project="$(basename "${cwd:-$PWD}")"
+
+# tmux の位置情報（tmux 外なら空のまま）
+pane="${TMUX_PANE:-}"
+tsession=""
+if [[ -n "$pane" ]]; then
+  # display-message は $TMUX に依存するため、サーバ全体の一覧から引く方が確実
+  tsession="$(tmux list-panes -a -F '#{pane_id} #{session_name}' 2>/dev/null \
+              | awk -v p="$pane" '$1==p {print $2; exit}')"
+fi
+
+now=$(date +%s)
+prev="$BUS/$sid.json"
+started="$now"
+if [[ -f "$prev" ]]; then
+  # running へ入る瞬間だけ計測開始をリセットする
+  if [[ "$state" == "running" ]]; then
+    started="$now"
+  else
+    started="$(jq -r '.started_at // empty' "$prev" 2>/dev/null)"
+    [[ -n "$started" ]] || started="$now"
+  fi
+fi
+
+tmp="$BUS/.$sid.$$"
+jq -n --arg sid "$sid" --arg project "$project" --arg cwd "$cwd" \
+      --arg transcript "$transcript" --arg pane "$pane" --arg ts "$tsession" \
+      --arg state "$state" --argjson started "$started" --argjson now "$now" '{
+  session_id: $sid, project: $project, cwd: $cwd, transcript_path: $transcript,
+  tmux_pane: $pane, tmux_session: $ts,
+  state: $state, started_at: $started, updated_at: $now
+}' > "$tmp" 2>/dev/null && mv -f "$tmp" "$BUS/$sid.json" || rm -f "$tmp"
+
+# 注意を要する状態だけ読み上げる。可視判定は claude-speak 側で行う。
+case "$state" in
+  done|waiting) [[ -x "$BIN/claude-speak" ]] && "$BIN/claude-speak" "$sid" "$state" &!  ;;
+esac
+
+# 作業の区切りを脳内ステートの journal にも流す（「何をしていたか」の材料になる）
+if [[ "$state" == "done" && -x "$BIN/mind" ]]; then
+  "$BIN/mind" session "$project" "完了" >/dev/null 2>&1 &!
+fi
+
+exit 0

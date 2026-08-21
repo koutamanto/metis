@@ -1,0 +1,180 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-macro <画像パス>
+#  画面に映っている指示を読み取り、コマンド列を抽出する。
+#  抽出結果は1回の確認ダイアログでまとめて見せ、承認後に新規ターミナルで
+#  上から順に実行する。危険と判断したコマンドはダイアログに出す前に除外する。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset extended_glob
+
+IMG="${1:-}"
+[[ -f "$IMG" ]] || { print -u2 "claude-macro: 画像が見つかりません: $IMG"; exit 1; }
+
+LOG="$HOME/.claude/quick-log"
+CFG="$HOME/.claude/macro-config.json"
+mkdir -p "$LOG"
+
+model="sonnet"; effort="low"; per_cmd_timeout=20; speak=true; workdir="$HOME"
+if [[ -f "$CFG" ]]; then
+  IFS=$'\t' read -r model effort per_cmd_timeout speak workdir <<< "$(
+    jq -r '[(.model // "sonnet"), (.effort // "low"),
+            (.per_command_timeout // 20), (.speak // true),
+            (.workdir // "~")] | @tsv' "$CFG" 2>/dev/null)"
+fi
+workdir="${workdir/#\~/$HOME}"
+[[ -d "$workdir" ]] || workdir="$HOME"
+
+notify() { osascript -e 'on run {t, m}
+  display notification m with title t
+end run' "$1" "$2" 2>/dev/null }
+
+METIS="$HOME/.claude/metis/actions.jsonl"
+mkdir -p "$HOME/.claude/metis"
+metis_id="macro-$(date +%s)-$RANDOM"
+metis_log() {   # metis_log <status> <prompt> <answer>
+  jq -nc --arg id "$metis_id" --arg mode "macro" --arg status "$1" \
+         --arg prompt "$2" --arg answer "$3" --argjson ts "$(date +%s)" \
+    '{id:$id, mode:$mode, status:$status, prompt:$prompt, answer:$answer, ts:$ts}' >> "$METIS"
+}
+metis_log "pending" "画面の指示を読み取り中" ""
+say_ja() { [[ "$speak" == "true" ]] && say -v Kyoko -r 210 "$1" 2>/dev/null & }
+
+# ─── 1. 画面の指示を読み取り、コマンド列を抽出する ───────────────────────────
+prompt="添付画像は、ユーザーの画面に表示されている作業指示です。Read ツールで画像を読み、
+そこに書かれている『次に実行すべきシェルコマンド』を上から順に抽出してください。
+
+出力は次の形式の JSON オブジェクトのみ。前置き・説明・コードフェンスは書かないこと。
+{
+  \"summary\": \"何をする指示だったかの一言\",
+  \"commands\": [
+    {\"cmd\": \"実行可能なシェルコマンド\", \"note\": \"それが何をするか一言\"},
+    ...
+  ]
+}
+
+厳守事項:
+- コマンド例として画像に書かれているものだけを対象にする。指示にない操作を勝手に足さない。
+- 破壊的な操作(rm -rf, ディスクの初期化, 認証情報の送信, sudo を要する変更など)は
+  \"cmd\" の先頭を \"UNSAFE: \" にして、実際のコマンドの代わりに理由を続けて書く。
+- コマンドが1つも見つからない場合は commands を空配列にする。
+- 説明文中の例示コマンド(「例: ls」のような文脈)は実行対象に含めない。判断に迷う場合は含めない。
+
+画像: $IMG"
+
+raw="$(CLAUDE_BUS_SKIP=1 claude -p --model "$model" --effort "$effort" --output-format json \
+             --permission-mode dontAsk --allowedTools=Read "$prompt" 2>/dev/null \
+       | jq -r '.result // empty')"
+raw="${raw//\`\`\`json/}"; raw="${raw//\`\`\`/}"
+
+# 用が済んだらすぐ削除する（プライバシー: 画面の指示以外が写り込む可能性があるため）
+rm -f "$IMG"
+
+if ! print -r -- "$raw" | jq -e 'type=="object" and has("commands")' >/dev/null 2>&1; then
+  metis_log "error" "画面の指示" "読み取れませんでした"
+  notify "Claude マクロ" "指示を読み取れませんでした"
+  say_ja "読み取れませんでした"
+  exit 1
+fi
+
+summary="$(print -r -- "$raw" | jq -r '.summary // "画面の指示"')"
+metis_log "pending" "$summary" "確認待ち"
+
+# ─── 2. 安全なものだけを候補にする（危険なものはダイアログに出す前に除外） ────
+typeset -a cmds notes skipped
+while IFS=$'\t' read -r c n; do
+  if [[ "$c" == UNSAFE:* ]]; then
+    skipped+=("$c")
+  else
+    cmds+=("$c"); notes+=("$n")
+  fi
+done < <(print -r -- "$raw" | jq -r '.commands[] | [.cmd, (.note // "")] | @tsv')
+
+if (( ${#cmds} == 0 )); then
+  if (( ${#skipped} > 0 )); then
+    metis_log "error" "$summary" "全て危険と判断し中止（${#skipped}件）"
+    notify "Claude マクロ" "全て危険と判断したため実行しませんでした（${#skipped}件）"
+    say_ja "危険なため中止しました"
+  else
+    metis_log "error" "$summary" "実行可能なコマンドが見つかりませんでした"
+    notify "Claude マクロ" "実行可能なコマンドが見つかりませんでした"
+  fi
+  exit 0
+fi
+
+# ─── 3. 一括確認ダイアログ（ここで1回だけ止まる。以降は連続実行） ────────────
+preview=""
+for i in {1..${#cmds}}; do
+  preview+="$i. ${cmds[i]}"
+  [[ -n "${notes[i]}" ]] && preview+="   # ${notes[i]}"
+  preview+=$'\n'
+done
+(( ${#skipped} > 0 )) && preview+=$'\n'"（危険と判断し除外: ${#skipped}件）"
+
+button="$(osascript -e 'on run {s, p}
+  set r to display dialog s & return & return & p ¬
+    with title "Claude マクロ — 実行内容の確認" ¬
+    buttons {"キャンセル", "この順に実行"} default button "この順に実行" ¬
+    with icon caution
+  return button returned of r
+end run' "$summary（${#cmds}件のコマンド）" "$preview" 2>/dev/null)" || {
+  metis_log "cancelled" "$summary" "キャンセルしました"
+  notify "Claude マクロ" "キャンセルしました"; exit 0
+}
+[[ "$button" == "この順に実行" ]] || {
+  metis_log "cancelled" "$summary" "キャンセルしました"
+  notify "Claude マクロ" "キャンセルしました"; exit 0
+}
+metis_log "running" "$summary" "${#cmds}件を実行中…"
+
+# ─── 4. 新規ターミナルを開き、上から順に「見える形」で実行する ──────────────
+stamp="$(date +%Y%m%d-%H%M%S)"
+out="$LOG/$stamp-macro.log"
+{
+  print -r -- "# 指示の要約: $summary"
+  print -r -- "# 実行: $(date)  (作業ディレクトリ: $workdir)"
+  print -r -- "─────────────────────────────────────────"
+  for s in "${skipped[@]}"; do print -r -- "# スキップ(危険と判断): ${s#UNSAFE: }"; done
+} > "$out"
+
+SESSION="macro-$stamp"
+tmux new-session -d -s "$SESSION" -c "$workdir" 2>/dev/null
+open -na Ghostty --args --title="Claude マクロ" 2>/dev/null
+sleep 0.6
+osascript -e 'tell application "Ghostty" to activate' 2>/dev/null
+tmux send-keys -t "$SESSION" "tmux attach -t $SESSION" C-m 2>/dev/null
+
+notify "Claude マクロ" "実行しています…（${#cmds}件）"
+
+typeset -i ok_count=0 fail_count=0
+for i in {1..${#cmds}}; do
+  cmd="${cmds[i]}"
+  marker="__macro_${stamp}_${i}__"
+  print -r -- "\$ $cmd" >> "$out"
+
+  # コマンドの完了を tmux wait-for で待つ（速いコマンドが後続を追い越さないように）
+  tmux send-keys -t "$SESSION" -l "$cmd" 2>/dev/null
+  tmux send-keys -t "$SESSION" " ; tmux wait-for -S $marker" 2>/dev/null
+  tmux send-keys -t "$SESSION" C-m 2>/dev/null
+
+  if timeout "$per_cmd_timeout" tmux wait-for "$marker" 2>/dev/null; then
+    ok_count+=1
+  else
+    fail_count+=1
+    print -r -- "# (タイムアウト: ${per_cmd_timeout}秒以内に完了しませんでした)" >> "$out"
+  fi
+  tmux capture-pane -p -t "$SESSION" -S -8 >> "$out" 2>/dev/null
+  print -r -- "─────────────────────────────────────────" >> "$out"
+done
+
+print -r -- "# 完了: ${ok_count}件 実行 / ${fail_count}件 タイムアウト / ${#skipped}件 スキップ" >> "$out"
+
+if (( fail_count == 0 )); then
+  metis_log "done" "$summary" "${ok_count}件 実行しました"
+  notify "Claude マクロ ✓ 完了" "${ok_count}件 実行しました"
+  say_ja "マクロ、完了"
+else
+  metis_log "error" "$summary" "${ok_count}件 成功 / ${fail_count}件 タイムアウト"
+  notify "Claude マクロ ✗ 一部失敗" "${ok_count}件 成功 / ${fail_count}件 タイムアウト"
+  say_ja "マクロが一部失敗しました"
+fi

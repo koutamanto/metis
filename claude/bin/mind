@@ -1,0 +1,130 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  mind — 脳内ステートコントローラー
+#    mind note <text>   断片を放り込む（分類はしない。後で AI がやる）
+#    mind show          現在の状態を人間向けに表示
+#    mind json          状態を JSON で出力（オーバーレイ用）
+#    mind sync          journal を読んで状態を再構成する（Sonnet 5）
+#    mind next          「次にやること」だけ表示
+#    mind session <project> <state>   セッション遷移を journal に記録
+#
+#  真実の源は追記のみの journal.jsonl。state.json はそこからの導出物なので、
+#  壊れてもいつでも作り直せる。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset extended_glob
+
+DIR="$HOME/.claude/mind"
+STATE="$DIR/state.json"
+JOURNAL="$DIR/journal.jsonl"
+CFG="$HOME/.claude/mind-config.json"
+mkdir -p "$DIR"
+[[ -f "$JOURNAL" ]] || : > "$JOURNAL"
+[[ -f "$STATE" ]] || print -r -- '{"now":"","next":[],"parked":[],"goals":{},"updated_at":0}' > "$STATE"
+
+model="sonnet"; effort="low"; window=40
+if [[ -f "$CFG" ]]; then
+  IFS=$'\t' read -r model effort window <<< "$(
+    jq -r '[(.model // "sonnet"), (.effort // "low"), (.journal_window // 40)] | @tsv' "$CFG" 2>/dev/null)"
+fi
+
+_append() {   # _append <kind> <text>
+  jq -nc --argjson ts "$(date +%s)" --arg kind "$1" --arg text "$2" \
+    '{ts:$ts, kind:$kind, text:$text}' >> "$JOURNAL"
+}
+
+cmd="${1:-show}"; shift 2>/dev/null
+
+case "$cmd" in
+
+  note)
+    text="$*"; [[ -n "$text" ]] || text="$(cat)"
+    [[ -n "$text" ]] || { print -u2 "mind note: 内容が空です"; exit 1; }
+    _append note "$text"
+    print "記録しました: $text"
+    ;;
+
+  session)
+    _append session "${1:-} が ${2:-} になりました"
+    ;;
+
+  frame)   # 画面観測からの入力（claude-eye-analyze が使う）
+    text="$*"; [[ -n "$text" ]] || text="$(cat)"
+    [[ -n "$text" ]] && _append frame "$text"
+    ;;
+
+  json)
+    cat "$STATE"
+    ;;
+
+  next)
+    jq -r '.next[]? | "・" + .' "$STATE"
+    ;;
+
+  show)
+    jq -r '
+      "【今】 " + (if (.now // "") == "" then "（まだ把握できていません）" else .now end),
+      "",
+      "【次にやること】",
+      ( if ((.next // []) | length) == 0 then "  （なし）"
+        else (.next[] | "  ・" + .) end ),
+      "",
+      "【保留・気になっていること】",
+      ( if ((.parked // []) | length) == 0 then "  （なし）"
+        else (.parked[] | "  ・" + .) end ),
+      "",
+      "【ゴール】",
+      ( if ((.goals // {}) | length) == 0 then "  （未設定）"
+        else (.goals | to_entries[] | "  " + .key + ": " + (.value|tostring)) end )
+    ' "$STATE"
+    ;;
+
+  # ─── journal を読み直して状態を再構成する ─────────────────────────────────
+  sync)
+    recent="$(tail -n "$window" "$JOURNAL" | jq -sc '[.[] | {ts, kind, text}]' 2>/dev/null)"
+    [[ -n "$recent" && "$recent" != "[]" ]] || { print "journal が空です"; exit 0; }
+    current="$(cat "$STATE")"
+
+    prompt="あなたはユーザーの作業状態を追跡する常駐アシスタントです。
+下の【現在の状態】と【最近の出来事】を読み、状態を更新してください。
+
+制約:
+- 出力は JSON オブジェクトのみ。前置き・説明・コードフェンスは一切書かない。
+- キーは now / next / parked / goals の4つ。
+- now: 今まさに取り組んでいることを1文で。日本語。
+- next: 次にやるべきことを最大3件。具体的な動詞で。完了したものは消す。
+- parked: 保留中の判断や気になっている点。最大5件。
+- goals: ユーザーが明示的に述べたゴールのみ保持する。推測で作らない。
+  既存の goals は、明確に達成・変更されたと分かる場合を除いて、そのまま残す。
+- 情報が足りない項目は、既存の値を維持する。無理に埋めない。
+
+【現在の状態】
+$current
+
+【最近の出来事】(古い順)
+$recent"
+
+    out="$(CLAUDE_BUS_SKIP=1 claude -p --model "$model" --effort "$effort" --output-format json \
+                  --permission-mode dontAsk "$prompt" 2>/dev/null | jq -r '.result // empty')"
+    # モデルがフェンスを付けた場合に備えて中身だけ取り出す
+    out="${out//\`\`\`json/}"; out="${out//\`\`\`/}"
+
+    if print -r -- "$out" | jq -e 'type == "object" and has("now")' >/dev/null 2>&1; then
+      print -r -- "$out" | jq --argjson ts "$(date +%s)" '{
+        now:    (.now    // ""),
+        next:   (.next   // [] | .[0:3]),
+        parked: (.parked // [] | .[0:5]),
+        goals:  (.goals  // {}),
+        updated_at: $ts
+      }' > "$STATE.tmp" && mv -f "$STATE.tmp" "$STATE"
+      print "状態を更新しました"
+    else
+      print -u2 "mind sync: 応答を解釈できなかったため、状態は変更していません"
+      exit 1
+    fi
+    ;;
+
+  *)
+    print -u2 "使い方: mind {note|show|json|next|sync|session|frame} [引数]"
+    exit 1 ;;
+esac

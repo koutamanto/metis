@@ -1,0 +1,58 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-sessions [--waiting] [--json]
+#  セッションバスを読み、TSV で返す共通ルーチン。
+#  cl / cq / HUD / jump がすべてこれを使う（整形ロジックを一箇所に集約）。
+#  列: state  project  tmux_session  tmux_pane  elapsed_sec  session_id
+#  空フィールドは "-" で埋める（tab 区切りの連続空白が read で詰まるのを避ける）
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset null_glob
+
+BUS="$HOME/.claude/session-bus"
+STALE=$(( 60 * 60 * 12 ))     # 12時間更新の無いレコードは捨てる
+
+want_waiting=0; want_json=0
+for a in "$@"; do
+  case "$a" in
+    --waiting) want_waiting=1 ;;
+    --json)    want_json=1 ;;
+  esac
+done
+
+files=("$BUS"/*.json)
+(( ${#files} )) || exit 0
+
+# 生きている tmux ペインの一覧を JSON 配列で渡し、絞り込みは jq 側で行う
+live_json='[]'
+if command -v tmux >/dev/null 2>&1; then
+  live_json="$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null | jq -R . | jq -sc . 2>/dev/null)"
+  [[ -n "$live_json" ]] || live_json='[]'
+fi
+
+jq -s --argjson now "$(date +%s)" --argjson stale "$STALE" \
+      --argjson waiting "$want_waiting" --argjson live "$live_json" '
+  map(select(($now - (.updated_at // 0)) < $stale))
+  # 放置されたレコードを落とす: 実行中のまま30分、待ちのまま4時間はもう生きていない
+  | map(select(
+      ($now - (.updated_at // 0)) as $age
+      | if   .state == "running" then $age < 1800
+        elif .state == "waiting" then $age < 14400
+        elif .state == "idle"    then $age < 1800
+        else true end ))
+  # tmux 内のセッションで、ペインが既に消えているものは除外する
+  | map(select((.tmux_pane // "") == "" or ((.tmux_pane) as $p | $live | index($p))))
+  | map(. + {elapsed: ($now - (.updated_at // $now))})
+  | if $waiting == 1 then map(select(.state == "waiting")) else . end
+  | sort_by( (if .state == "waiting" then 0 elif .state == "running" then 1
+              elif .state == "done" then 2 else 3 end), .updated_at )
+' "${files[@]}" 2>/dev/null | if (( want_json )); then
+  cat
+else
+  jq -r '.[] | [ .state,
+                 (.project       | if . == "" or . == null then "-" else . end),
+                 (.tmux_session  | if . == "" or . == null then "-" else . end),
+                 (.tmux_pane     | if . == "" or . == null then "-" else . end),
+                 (.elapsed | tostring),
+                 .session_id ] | @tsv'
+fi

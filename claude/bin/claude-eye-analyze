@@ -1,0 +1,66 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-eye-analyze
+#  溜まったフレームから代表を数枚選び、Sonnet 5 に「何をしているか」を
+#  客観的に記述させて mind の journal へ流す。解析後は必ずフレームを片付ける。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset null_glob
+
+EYE="$HOME/.claude/eye"
+FRAMES="$EYE/frames"
+ARCHIVE="$EYE/archive"
+CFG="$HOME/.claude/eye-config.json"
+BIN="$HOME/.claude/bin"
+LOCK="$EYE/.analyze.lock"
+mkdir -p "$FRAMES" "$ARCHIVE"
+
+archive_hours=12
+[[ -f "$CFG" ]] && archive_hours="$(jq -r '.archive_hours // 12' "$CFG" 2>/dev/null)"
+
+# 多重起動を防ぐ（解析中に次のタイマーが来ても走らせない）
+mkdir "$LOCK" 2>/dev/null || exit 0
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+frames=("$FRAMES"/*.jpg(N.om))     # 新しい順
+(( ${#frames} )) || exit 0
+
+# 古い順に並べ直し、最初・中間・最後の3枚を代表として選ぶ
+frames=(${(Oa)frames})
+n=${#frames}
+if (( n <= 3 )); then
+  picked=("${frames[@]}")
+else
+  picked=("${frames[1]}" "${frames[(n+1)/2]}" "${frames[n]}")
+fi
+
+list=""
+for f in "${picked[@]}"; do list+="- $f"$'\n'; done
+
+prompt="次の画像は、あるユーザーの作業画面を時系列に並べたスクリーンショットです。
+Read ツールで全て読んでから答えてください。
+
+$list
+
+これらを見て、ユーザーが今どんな作業をしているかを日本語1〜2文で客観的に記述してください。
+
+厳守事項:
+- パスワード、APIキー、トークン、個人名、メールアドレス、電話番号、住所、
+  口座情報などが写っていても、絶対に書き写さないこと。
+- 推測を断定で書かない。読み取れない場合は「画面からは判別できない」と書く。
+- 前置き・箇条書き・見出しは不要。説明文のみを返す。"
+
+desc="$(CLAUDE_BUS_SKIP=1 claude -p --model sonnet --effort low --output-format json \
+              --permission-mode dontAsk --allowedTools=Read \
+              "$prompt" 2>/dev/null | jq -r '.result // empty')"
+
+if [[ -n "$desc" ]]; then
+  print -r -- "$desc" | "$BIN/mind" frame
+  "$BIN/mind" sync >/dev/null 2>&1
+fi
+
+# 解析済みフレームを退避し、保持期間を過ぎたものを消す
+for f in "${frames[@]}"; do mv -f "$f" "$ARCHIVE/" 2>/dev/null; done
+find "$ARCHIVE" -name '*.jpg' -mmin +$(( archive_hours * 60 )) -delete 2>/dev/null
+
+exit 0

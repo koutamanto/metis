@@ -1,0 +1,22 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  metis-recent [件数]
+#  ~/.claude/metis/actions.jsonl は id ごとに pending→done のように複数行が
+#  積まれる追記オンリーのログ。id ごとの「最新の1行」だけを、新しい順に
+#  最大N件、JSON配列で返す。Hammerspoon の Metis パネルが読む唯一の入口。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset
+
+FILE="$HOME/.claude/metis/actions.jsonl"
+N="${1:-8}"
+
+[[ -s "$FILE" ]] || { print '[]'; exit 0 }
+
+# 末尾から広めに読み、id ごとに最後の行を残してから新しい順にN件へ絞る
+tail -n 400 "$FILE" 2>/dev/null | jq -sc --argjson n "$N" '
+  group_by(.id)
+  | map(sort_by(.ts) | last)
+  | sort_by(.ts) | reverse
+  | .[0:$n]
+'

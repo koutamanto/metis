@@ -1,0 +1,1 @@
+{ "model": "sonnet", "effort": "low", "per_command_timeout": 20, "speak": true, "workdir": "~" }

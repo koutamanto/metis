@@ -1,0 +1,105 @@
+# ═════════════════════════════════════════════════════════════════════════════
+#  AeroSpace — ワークスペース分離（SIP 無効化は不要）
+#  1 = エディタ / 2 = Claude群 / 3 = ブラウザ / 4 = 雑用
+# ═════════════════════════════════════════════════════════════════════════════
+
+start-at-login = true
+after-login-command = []
+after-startup-command = []
+
+enable-normalization-flatten-containers = true
+enable-normalization-opposite-orientation-for-nested-containers = true
+
+# 画面が1枚で狭いため、既定はタイルではなく accordion（1枚を大きく使う）
+default-root-container-layout = 'accordion'
+default-root-container-orientation = 'auto'
+accordion-padding = 24
+
+on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
+automatically-unhide-macos-hidden-apps = false
+
+[key-mapping]
+preset = 'qwerty'
+
+[gaps]
+inner.horizontal = 8
+inner.vertical   = 8
+outer.left       = 8
+outer.right      = 8
+outer.top        = 8
+outer.bottom     = 8
+
+# ─── ウィンドウ振り分け ──────────────────────────────────────────────────────
+# Claude 専用パネルは Hammerspoon が位置を管理するのでタイルに巻き込まない
+[[on-window-detected]]
+if.app-id = 'com.mitchellh.ghostty'
+if.window-title-regex-substring = 'Claude Panel'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.systempreferences'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'org.hammerspoon.Hammerspoon'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.microsoft.VSCode'
+run = 'move-node-to-workspace 1'
+
+[[on-window-detected]]
+if.app-id = 'com.mitchellh.ghostty'
+run = 'move-node-to-workspace 2'
+
+[[on-window-detected]]
+if.app-id = 'com.google.Chrome'
+run = 'move-node-to-workspace 3'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.Safari'
+run = 'move-node-to-workspace 3'
+
+# ─── キーバインド ────────────────────────────────────────────────────────────
+[mode.main.binding]
+
+# ワークスペース切り替え
+alt-1 = 'workspace 1'
+alt-2 = 'workspace 2'
+alt-3 = 'workspace 3'
+alt-4 = 'workspace 4'
+alt-tab = 'workspace-back-and-forth'
+
+# ウィンドウを別ワークスペースへ送る
+alt-shift-1 = 'move-node-to-workspace 1 --focus-follows-window'
+alt-shift-2 = 'move-node-to-workspace 2 --focus-follows-window'
+alt-shift-3 = 'move-node-to-workspace 3 --focus-follows-window'
+alt-shift-4 = 'move-node-to-workspace 4 --focus-follows-window'
+
+# フォーカス移動 / ウィンドウ移動
+alt-h = 'focus left'
+alt-j = 'focus down'
+alt-k = 'focus up'
+alt-l = 'focus right'
+alt-shift-h = 'move left'
+alt-shift-j = 'move down'
+alt-shift-k = 'move up'
+alt-shift-l = 'move right'
+
+# レイアウト
+alt-slash = 'layout tiles horizontal vertical'
+alt-comma = 'layout accordion horizontal vertical'
+alt-f     = 'fullscreen'
+alt-shift-space = 'layout floating tiling'
+
+# リサイズモード
+alt-r = 'mode resize'
+
+[mode.resize.binding]
+h = 'resize width -50'
+j = 'resize height +50'
+k = 'resize height -50'
+l = 'resize width +50'
+balance = 'balance-sizes'
+enter = 'mode main'
+esc = 'mode main'

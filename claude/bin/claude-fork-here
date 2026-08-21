@@ -1,0 +1,62 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-fork-here
+#  「今フォーカスしているターミナルの Claude Code セッション」を根として、
+#  ノンブロッキングで枝分かれした新セッションを tmux 内に作る。
+#  フォーカスも画面も一切奪わない — ⌘⌥F を押した瞬間に裏で走り出す。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset
+
+notify() { osascript -e 'on run {t, m}
+  display notification m with title t
+end run' "$1" "$2" 2>/dev/null }
+say_ja() { say -v Kyoko -r 210 "$1" 2>/dev/null & }
+
+# ─── 1. 今フォーカスされている tmux ペインを特定する ─────────────────────────
+# attach 済みセッションの、アクティブウィンドウの、アクティブペインのみが対象。
+pane="$(tmux list-panes -a -F '#{pane_id} #{session_attached}#{window_active}#{pane_active}' 2>/dev/null \
+        | awk '$2=="111"{print $1; exit}')"
+
+if [[ -z "$pane" ]]; then
+  notify "Metis" "フォーカス中の Claude セッションが見つかりません（tmux 内で実行してください）"
+  say_ja "フォーカス中のセッションが見つかりません"
+  exit 1
+fi
+
+# ─── 2. そのペインの session_id をセッションバスから引く ────────────────────
+root="$($HOME/.claude/bin/claude-sessions --json 2>/dev/null \
+        | jq -r --arg p "$pane" '[.[] | select(.tmux_pane == $p)] | sort_by(.updated_at) | last | .session_id // empty')"
+
+if [[ -z "$root" ]]; then
+  notify "Metis" "このペインの Claude セッションを特定できませんでした"
+  say_ja "特定できませんでした"
+  exit 1
+fi
+
+cwd="$(tmux display-message -p -t "$pane" '#{pane_current_path}' 2>/dev/null)"
+[[ -d "$cwd" ]] || cwd="$HOME"
+
+# ─── 3. 枝を作る（現在のウィンドウには一切触れない） ─────────────────────────
+name="fork-$(date +%H%M%S)"
+tmux new-session -d -s "$name" -c "$cwd" 2>/dev/null || {
+  notify "Metis" "枝を作成できませんでした"; exit 1
+}
+tmux send-keys -t "$name" "claude --resume $root --fork-session" C-m 2>/dev/null
+
+notify "Metis — 枝分かれ" "「$name」で並行実行を開始しました（cl / ⌘⌥J で移動できます）"
+say_ja "枝分かれを開始しました"
+
+# 「このフォルダを信頼するか」の初回確認は、親セッションと同じ cwd（既に
+# 信頼済み）を再確認するだけなので、裏で自動承認してノンブロッキングを保つ。
+(
+  for _ in $(seq 1 20); do
+    sleep 0.3
+    if tmux capture-pane -p -t "$name" 2>/dev/null | grep -q "trust this folder"; then
+      tmux send-keys -t "$name" "1" C-m 2>/dev/null
+      break
+    fi
+  done
+) &!
+
+exit 0

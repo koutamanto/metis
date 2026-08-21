@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "done_voice": "Kyoko",
+  "wait_voice": "Otoya",
+  "rate": 210,
+  "only_when_hidden": true
+}

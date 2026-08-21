@@ -1,0 +1,40 @@
+{
+  "_comment": "既存の ~/.claude/settings.json の \"hooks\" と \"statusLine\" に、以下の内容をマージしてください（丸ごと上書きしないこと）。パスは自分の環境の $HOME に置き換えてください。",
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "$HOME/.claude/bin/session-bus-hook", "async": true }
+      ]}
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "$HOME/.claude/bin/session-bus-hook", "async": true }
+      ]}
+    ],
+    "Notification": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "$HOME/.claude/bin/session-bus-hook", "async": true }
+      ]}
+    ],
+    "PermissionRequest": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "$HOME/.claude/bin/session-bus-hook", "async": true }
+      ]}
+    ],
+    "Stop": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "$HOME/.claude/bin/session-bus-hook", "async": true }
+      ]}
+    ],
+    "SessionEnd": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "$HOME/.claude/bin/session-bus-hook", "async": true }
+      ]}
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "$HOME/.claude/bin/claude-statusline",
+    "padding": 0
+  }
+}

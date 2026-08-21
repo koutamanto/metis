@@ -1,0 +1,216 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-quick <ask|deep|snippet> [テキスト...]
+#  テキストは引数か stdin で受け取る。
+#  ホットキー(Hammerspoon)と右クリック(macOS Services)の共通実体。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset extended_glob
+
+BIN="$HOME/.claude/bin"
+LOG="$HOME/.claude/quick-log"
+CFG="$HOME/.claude/quick-config.json"
+METIS="$HOME/.claude/metis/actions.jsonl"
+mkdir -p "$LOG" "$HOME/.claude/metis"
+
+# ─── Metis パネル用ログ（追記のみ。同じ id で pending→done/error の順に積む） ─
+metis_log() {   # metis_log <id> <mode> <status> <prompt> <answer>
+  jq -nc --arg id "$1" --arg mode "$2" --arg status "$3" \
+         --arg prompt "$4" --arg answer "$5" --argjson ts "$(date +%s)" \
+    '{id:$id, mode:$mode, status:$status, prompt:$prompt, answer:$answer, ts:$ts}' >> "$METIS"
+}
+
+mode="${1:-ask}"; shift 2>/dev/null
+
+if [[ "$mode" == "shot" ]]; then
+  # shot だけは第一引数が画像パス。質問文は空でも良い（既定の質問を使う）。
+  img="${1:-}"; shift 2>/dev/null
+  text="$*"
+  [[ -f "$img" ]] || {
+    osascript -e 'display notification "画像が見つかりません" with title "Claude Quick"' 2>/dev/null
+    exit 1
+  }
+else
+  text="$*"
+  [[ -n "$text" ]] || text="$(cat)"
+  text="${text##[[:space:]]#}"; text="${text%%[[:space:]]#}"
+
+  if [[ -z "$text" ]]; then
+    osascript -e 'display notification "テキストが選択されていません" with title "Claude Quick"' 2>/dev/null
+    exit 1
+  fi
+fi
+
+# ─── 設定 ────────────────────────────────────────────────────────────────────
+confirm=true; speak=true; fast_model="sonnet"; fast_effort="low"
+deep_model="opus"; deep_effort="high"; workdir="$HOME"
+if [[ -f "$CFG" ]]; then
+  IFS=$'\t' read -r confirm speak fast_model fast_effort deep_model deep_effort workdir <<< "$(
+    jq -r '[(.confirm // true), (.speak // true),
+            (.fast_model // "sonnet"), (.fast_effort // "low"),
+            (.deep_model // "opus"),   (.deep_effort // "high"),
+            (.workdir // "~")] | @tsv' "$CFG" 2>/dev/null)"
+  workdir="${workdir/#\~/$HOME}"
+  [[ -d "$workdir" ]] || workdir="$HOME"
+fi
+
+stamp="$(date +%Y%m%d-%H%M%S)"
+notify() { osascript -e 'on run {t, m}
+  display notification m with title t
+end run' "$1" "$2" 2>/dev/null }
+say_ja() { [[ "$speak" == "true" ]] && say -v Kyoko -r 210 "$1" 2>/dev/null & }
+
+# claude を1回呼ぶ（結果テキストだけを返す）
+run_claude() {
+  local model="$1" effort="$2" prompt="$3"
+  CLAUDE_BUS_SKIP=1 claude -p --model "$model" --effort "$effort" --output-format json \
+         --permission-mode dontAsk "$prompt" 2>/dev/null | jq -r '.result // empty'
+}
+
+case "$mode" in
+
+  # ─── Shot: 画面を1枚撮って、それを見ながら質問に即答 ────────────────────
+  shot)
+    id="$stamp-$RANDOM"
+    question="$text"
+    [[ -n "$question" ]] || question="この画面に写っているものを説明して"
+    metis_log "$id" "shot" "pending" "$question" ""
+
+    answer="$(CLAUDE_BUS_SKIP=1 claude -p --model "$fast_model" --effort "$fast_effort" \
+                   --output-format json --permission-mode dontAsk --allowedTools=Read \
+"添付画像は、ユーザーが今見ている画面のスクリーンショットです。Read ツールで画像を読み、
+次の質問に簡潔に日本語で答えてください。前置き・繰り返しは不要で、結論から書いてください。
+画像に写っている個人情報(パスワード・トークン・氏名・連絡先など)を書き写さないこと。
+
+質問: $question
+
+画像: $img" 2>/dev/null | jq -r '.result // empty')"
+
+    rm -f "$img"   # 用が済んだらすぐ削除（プライバシー）
+
+    if [[ -z "$answer" ]]; then
+      metis_log "$id" "shot" "error" "$question" "回答を取得できませんでした"
+      notify "Shot" "回答を取得できませんでした"; say_ja "失敗しました"; exit 1
+    fi
+
+    metis_log "$id" "shot" "done" "$question" "$answer"
+    print -r -- "$answer" | pbcopy
+    print -r -- "$answer" > "$LOG/$stamp-shot.txt"
+    notify "Shot（クリップボードにコピー済み）" "${answer[1,240]}"
+    say_ja "回答が出ました"
+    ;;
+
+  # ─── 選択テキストに即答（Sonnet 5 / 最速） ───────────────────────────────
+  ask|deep)
+    if [[ "$mode" == "ask" ]]; then model="$fast_model"; effort="$fast_effort"
+    else                            model="$deep_model"; effort="$deep_effort"; fi
+
+    id="$stamp-$RANDOM"
+    # 待たせている間もパネルに「考え中」が即座に出るよう、結果を待つ前に記録する
+    metis_log "$id" "$mode" "pending" "$text" ""
+
+    answer="$(run_claude "$model" "$effort" \
+"以下について簡潔に日本語で答えてください。前置き・繰り返しは不要で、結論から書いてください。
+
+---
+$text")"
+
+    if [[ -z "$answer" ]]; then
+      metis_log "$id" "$mode" "error" "$text" "回答を取得できませんでした"
+      notify "Claude Quick" "回答を取得できませんでした"; say_ja "失敗しました"; exit 1
+    fi
+
+    metis_log "$id" "$mode" "done" "$text" "$answer"
+    print -r -- "$answer" | pbcopy
+    print -r -- "$answer" > "$LOG/$stamp-$mode.txt"
+    notify "Claude Quick（クリップボードにコピー済み）" "${answer[1,240]}"
+    say_ja "回答が出ました"
+
+    # 深掘りは全文を読みたいので専用パネルに流す
+    if [[ "$mode" == "deep" ]]; then
+      print -r -- "$answer" | ${PAGER:-less} > /dev/null 2>&1 &!
+      open -a Ghostty 2>/dev/null
+    fi
+    ;;
+
+  # ─── コマンドスニペットを生成して実行 ───────────────────────────────────
+  snippet)
+    id="$stamp-$RANDOM"
+    metis_log "$id" "snippet" "pending" "$text" ""
+    notify "Claude スニペット" "コマンドを生成中…"
+    cmd="$(run_claude "$fast_model" "$fast_effort" \
+"次の要求を満たす macOS(zsh)のシェルコマンドを1つだけ出力してください。
+説明・コードフェンス・前置きは一切不要で、実行可能なコマンド行のみを返してください。
+破壊的な操作(rm -rf, ディスク書き換え, 認証情報の送信など)が必要な要求の場合は、
+コマンドの代わりに UNSAFE とだけ出力してください。
+
+要求:
+$text")"
+
+    cmd="${cmd//\`/}"                        # 念のためフェンス除去
+    cmd="${cmd##[[:space:]]#}"; cmd="${cmd%%[[:space:]]#}"
+
+    if [[ -z "$cmd" ]]; then
+      metis_log "$id" "snippet" "error" "$text" "コマンドを生成できませんでした"
+      notify "Claude スニペット" "コマンドを生成できませんでした"; exit 1
+    fi
+    if [[ "$cmd" == "UNSAFE"* ]]; then
+      metis_log "$id" "snippet" "error" "$text" "危険と判断: ${cmd#UNSAFE: }"
+      notify "Claude スニペット" "危険と判断したため生成を中止しました"
+      say_ja "危険なため中止しました"; exit 1
+    fi
+    metis_log "$id" "snippet" "confirming" "$text" "$cmd"
+
+    # ─── 確認ダイアログ（編集可能） ────────────────────────────────────────
+    if [[ "$confirm" == "true" ]]; then
+      cmd="$(osascript -e 'on run {c}
+        set r to display dialog "このコマンドをバックグラウンドで実行します:" ¬
+          default answer c with title "Claude スニペット" ¬
+          buttons {"キャンセル", "実行"} default button "実行" with icon note
+        return text returned of r
+      end run' "$cmd" 2>/dev/null)" || {
+        metis_log "$id" "snippet" "cancelled" "$text" "キャンセルしました"
+        notify "Claude スニペット" "キャンセルしました"; exit 0
+      }
+      [[ -n "$cmd" ]] || { metis_log "$id" "snippet" "cancelled" "$text" "キャンセルしました"; exit 0; }
+    fi
+    metis_log "$id" "snippet" "running" "$text" "$cmd"
+
+    # ─── バックグラウンド実行 ──────────────────────────────────────────────
+    out="$LOG/$stamp-snippet.log"
+    {
+      print -r -- "# 要求: $text"
+      print -r -- "# コマンド: $cmd"
+      print -r -- "# 実行: $(date)  (作業ディレクトリ: $workdir)"
+      print -r -- "─────────────────────────────────────────"
+    } > "$out"
+
+    notify "Claude スニペット" "実行中: ${cmd[1,120]}"
+    (
+      cd "$workdir" || exit 1
+      zsh -c "$cmd" >> "$out" 2>&1
+      rc=$?
+      print -r -- "─────────────────────────────────────────" >> "$out"
+      print -r -- "# 終了コード: $rc" >> "$out"
+      if (( rc == 0 )); then
+        tail="$(tail -c 240 "$out")"
+        metis_log "$id" "snippet" "done" "$text" "$cmd  →  $tail"
+        osascript -e 'on run {t, m}
+          display notification m with title t
+        end run' "Claude スニペット ✓ 完了" "$tail" 2>/dev/null
+        [[ "$speak" == "true" ]] && say -v Kyoko -r 210 "コマンド、完了" 2>/dev/null
+      else
+        tail="$(tail -c 240 "$out")"
+        metis_log "$id" "snippet" "error" "$text" "$cmd  →  (終了コード $rc) $tail"
+        osascript -e 'on run {t, m}
+          display notification m with title t
+        end run' "Claude スニペット ✗ 失敗 (code $rc)" "$tail" 2>/dev/null
+        [[ "$speak" == "true" ]] && say -v Kyoko -r 190 "コマンドが失敗しました" 2>/dev/null
+      fi
+    ) &!
+    ;;
+
+  *)
+    print -u2 "使い方: claude-quick <ask|deep|snippet> [テキスト]"
+    exit 1 ;;
+esac

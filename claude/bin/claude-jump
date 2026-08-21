@@ -1,0 +1,51 @@
+#!/bin/zsh
+# ─────────────────────────────────────────────────────────────────────────────
+#  claude-jump [pane_id]        指定ペインへ移動
+#  claude-jump --next-waiting   「待ち」状態のセッションを順に巡回
+#  cl と Hammerspoon の Cmd+Opt+J が共通で使う。
+# ─────────────────────────────────────────────────────────────────────────────
+emulate -L zsh
+setopt no_unset
+
+BIN="$HOME/.claude/bin"
+CURSOR="$HOME/.claude/.jump-cursor"
+
+pane="${1:-}"
+
+if [[ "$pane" == "--next-waiting" ]]; then
+  panes=("${(@f)$("$BIN/claude-sessions" --waiting | awk -F'\t' '$4!="-"{print $4}')}")
+  panes=(${panes:#})
+  if (( ${#panes} == 0 )); then
+    print -u2 "待ち状態のセッションはありません"
+    exit 1
+  fi
+  # 前回位置の次を選び、連打で巡回できるようにする
+  last=""; [[ -f "$CURSOR" ]] && last="$(<"$CURSOR")"
+  idx=${panes[(Ie)$last]}          # 見つからなければ 0
+  (( idx = idx % ${#panes} + 1 ))
+  pane="${panes[idx]}"
+  print -r -- "$pane" > "$CURSOR"
+fi
+
+[[ -n "$pane" && "$pane" != "-" ]] || { print -u2 "移動先のペインが指定されていません"; exit 1; }
+
+target_session="$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)" || {
+  print -u2 "ペイン $pane は存在しません"; exit 1; }
+
+# ペイン → ウィンドウ → セッション の順に絞り込む
+tmux select-pane   -t "$pane" 2>/dev/null
+tmux select-window -t "$pane" 2>/dev/null
+
+if [[ -n "${TMUX:-}" ]]; then
+  tmux switch-client -t "$target_session" 2>/dev/null
+else
+  # tmux 外から呼ばれた場合は、既存クライアントを目的のセッションへ向ける
+  if tmux list-clients -F '#{client_tty}' 2>/dev/null | grep -q .; then
+    tmux switch-client -t "$target_session" 2>/dev/null
+  else
+    tmux attach-session -t "$target_session"
+  fi
+fi
+
+# ターミナルを前面へ（Hammerspoon 経由でなくても効くように）
+open -a Ghostty 2>/dev/null || true

@@ -1,0 +1,19 @@
+#!/bin/zsh
+# Claude Code のステータス行。stdin にセッション情報の JSON が渡される。
+emulate -L zsh
+setopt no_unset
+input="$(cat)"
+IFS=$'\t' read -r cwd model style cost dur <<< "$(
+  print -r -- "$input" | jq -r '[(.workspace.current_dir // .cwd // ""),
+                                 (.model.display_name // .model.id // ""),
+                                 (.output_style.name // ""),
+                                 ((.cost.total_cost_usd // 0) | tostring),
+                                 ((.cost.total_duration_ms // 0) | tostring)] | @tsv' 2>/dev/null)"
+proj="${cwd:t}"; [[ -n "$proj" ]] || proj="~"
+waiting="$($HOME/.claude/bin/claude-sessions --waiting 2>/dev/null | wc -l | tr -d ' ')"
+
+out="%F{blue}󰉋 ${proj}%f  %F{magenta}${model}%f"
+[[ -n "$style" && "$style" != "null" ]] && out+="  %F{240}${style}%f"
+(( ${cost:-0} > 0 )) && out+="  %F{yellow}\$$(printf '%.2f' "$cost")%f"
+(( ${waiting:-0} > 0 )) && out+="  %F{red}◆${waiting} 待機%f"
+print -rn -- "${(%)out}"

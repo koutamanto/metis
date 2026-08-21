@@ -1,0 +1,5 @@
+#!/bin/zsh
+# 読み上げを即停止し、ロックを解放する
+pkill -x say 2>/dev/null
+rmdir "$HOME/.claude/.speak.lock" 2>/dev/null
+exit 0

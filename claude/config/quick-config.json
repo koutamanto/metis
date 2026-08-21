@@ -1,0 +1,9 @@
+{
+  "confirm": true,
+  "speak": true,
+  "fast_model": "sonnet",
+  "fast_effort": "low",
+  "deep_model": "opus",
+  "deep_effort": "high",
+  "workdir": "~"
+}
